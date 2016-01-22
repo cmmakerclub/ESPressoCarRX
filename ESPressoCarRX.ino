@@ -251,34 +251,34 @@ void controlMotor() {
   // tempCh2 = (int8_t)packetBuffer[2];
 
   //Stick center
-  if ((int8_t)packetBuffer[1] == 0) {
+  if ((int8_t)packetBuffer[2] == 0) {
     outputControlForward = 0;
     outputControlBackward =  0;
   }
 
-  if ((int8_t)packetBuffer[2]  == 0) {
+  if ((int8_t)packetBuffer[1]  == 0) {
     outputControlRight = 0;
     outputControlLeft = 0;
   }
   //
 
-  if ((int8_t)packetBuffer[1] > 0) { //if ch1 > 0  car will forward
-    outputControlForward = map((int8_t)packetBuffer[1], 0, 60, 0, 1023);
+  if ((int8_t)packetBuffer[2] > 0) { //if ch1 > 0  car will forward
+    outputControlForward = map((int8_t)packetBuffer[2], 0, 60, 0, 1023);
     outputControlBackward = 0;
   }
-  if ((int8_t)packetBuffer[1] < 0) { //if ch1 < 0  car will backward
+  if ((int8_t)packetBuffer[2] < 0) { //if ch1 < 0  car will backward
     outputControlForward = 0;
 
-    outputControlBackward =  map(abs((int8_t)packetBuffer[1]), 0, 60, 0, 1023);
+    outputControlBackward =  map(abs((int8_t)packetBuffer[2]), 0, 60, 0, 1023);
   }
 
-  if ((int8_t)packetBuffer[2] > 0) { //if ch2 > 0  car will right
+  if ((int8_t)packetBuffer[1] > 0) { //if ch2 > 0  car will right
     outputControlLeft = 0;
-    outputControlRight = map((int8_t)packetBuffer[2], 0, 35, 0, 1023);
+    outputControlRight = map((int8_t)packetBuffer[1], 0, 35, 0, 1023);
   }
-  if ((int8_t)packetBuffer[2] < 0) { //if ch2 < 0  car will left
+  if ((int8_t)packetBuffer[1] < 0) { //if ch2 < 0  car will left
     outputControlRight = 0;
-    outputControlLeft = map(abs((int8_t)packetBuffer[2]), 0, 35, 0, 1023);
+    outputControlLeft = map(abs((int8_t)packetBuffer[1]), 0, 35, 0, 1023);
   }
 
 
