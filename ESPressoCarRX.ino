@@ -4,10 +4,11 @@
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
 #include <Wire.h>
+#include <EEPROM.h>
 //#include <Adafruit_GFX.h>
 //#include <ESP_Adafruit_SSD1306.h>
-
-
+static const int PIN_LED = 16; // ESPresso Lite
+int ledState = LOW;
 #define buffer_size 100
 //#define OLED_RESET 4
 
@@ -20,6 +21,9 @@
 #define motorL 14
 #define motorR 15
 
+#define disconnectState 1000
+#define UDPCONNECT 100
+
 
 //Adafruit_SSD1306 display(OLED_RESET);
 
@@ -28,13 +32,18 @@ const char *ssid = "kkao_server";
 const char *password = "12345678";
 
 unsigned int localPort = 12345;
-unsigned long time_now, time_prev_udp, time_prev_led, time_prev_control_motor, timeCheckDisconnect;
+unsigned long time_now, time_prev_udp, time_prev_led, time_prev_control_motor, timeCheckDisconnect,timeLED13;
 int cb = 1;
-int8_t sumCheck;
+int8_t sumCheck,sumCheckS;
 int tempCh1, tempCh2;
 int outputControlForward, outputControlBackward, outputControlLeft, outputControlRight;
 
+int countPacket;
+
+int eeYaw,eePitch,eeRoll;
+
 boolean dataTrue = true;
+boolean setUpPID = false;
 
 char packetBuffer[buffer_size] = {0}; //buffer to hold incoming and outgoing packets
 WiFiUDP udp;
@@ -48,10 +57,19 @@ IPAddress subnet(255, 255, 255, 0);
 void Read_UDP();
 void setup_oled();
 void controlMotor();
+void ledStatus(int timeBlink);
+void readDataYPR();
+void writeDataYPR(int yaw,int pitch,int roll);
+void checkSetupData();
 
 void setup()
 {
   WiFi.disconnect();
+  Serial.begin(115200);
+  EEPROM.begin(512);
+  
+
+  
   pinMode(motorF, OUTPUT);
   pinMode(motorB, OUTPUT);
   pinMode(motorL, OUTPUT);
@@ -63,7 +81,7 @@ void setup()
   //delay(3000);
 
 
-  Serial.begin(115200);
+  
 
 
 
@@ -81,13 +99,15 @@ void setup()
 
   }
 
-  //delay(1000);
+  delay(1000);
 
   time_now = millis();
   time_prev_udp = time_now;
   time_prev_led = time_now;
   time_prev_control_motor = time_now;
   timeCheckDisconnect = time_now;
+
+  
 
 }
 
@@ -96,21 +116,22 @@ void loop()
   time_now = millis();
   Read_UDP();// stand by read UDP
   //controlMotor();
-//  if (time_now - time_prev_control_motor >= period_control_motor)
-//  {
-//    time_prev_control_motor = time_now;
-//
-//    //digitalWrite(12, 1);    // debug
-//    //Read_UDP();
-//    // digitalWrite(12, 0);    // debug
-//    //do
+  if (time_now - time_prev_control_motor >= 1000)
+  {
+    time_prev_control_motor = time_now;
+
+    //digitalWrite(12, 1);    // debug
+    //Read_UDP();
+    // digitalWrite(12, 0);    // debug
+    //do
 //    if (dataTrue) {
 //      controlMotor();
 //    }
-//
-//
-//
-//  }//end control motor loop
+
+    Serial.println(countPacket);
+    countPacket = 0;
+
+  }//end control motor loop
 
   //  if (time_now - time_prev_led >= period_led)    // 10Hz
   //  {
@@ -148,6 +169,8 @@ void Read_UDP()
       dataTrue = true;
       controlMotor();
 
+      ledStatus(disconnectState);
+
 
     }
   }
@@ -155,9 +178,9 @@ void Read_UDP()
     //Serial.print("length=");
     //Serial.println(cb);
     timeCheckDisconnect = time_now;
-
+    ledStatus(UDPCONNECT);
     memset(packetBuffer, 0, buffer_size); // clear mem
-
+    countPacket++;
     udp.read(packetBuffer, cb); // read the packet into the buffer
     // String temp = packetBuffer;
     // Serial.println(packetBuffer);
@@ -169,7 +192,11 @@ void Read_UDP()
     //   display.setCursor(0, 0);
     // }
     // count++;
-
+     //Serial.println((int16_t)packetBuffer[0],HEX);
+    
+    checkSetupData();
+ 
+    
     // display.print((int)packetBuffer[0]);
     // display.print("  ");
     // display.print((int)packetBuffer[1]);
@@ -181,7 +208,7 @@ void Read_UDP()
     // display.display();
     sumCheck = (int8_t)packetBuffer[1] + (int8_t)packetBuffer[2] + (int8_t)packetBuffer[3] + (int8_t)packetBuffer[4];
 
-    if (sumCheck == (int8_t)packetBuffer[5]) {
+    if (sumCheck == (int8_t)packetBuffer[5] ) {
       dataTrue = true;
       //      Serial.print(" check bit ");
       //      Serial.print((int8_t)packetBuffer[0]);
@@ -229,7 +256,7 @@ void Read_UDP()
     //      Serial.write((int8_t)packetBuffer[2]);  // throttle
     //      Serial.write((int8_t)packetBuffer[3]);  // yaw
     //      Serial.write(0xfe);
-    digitalWrite(16, !digitalRead(16));
+    //digitalWrite(16, !digitalRead(16));
 
 
 
@@ -239,7 +266,8 @@ void Read_UDP()
 /*
    Function controlMotor()
    4 output  F B  L  R
-   output range 0 - 1023
+  F B output range 0 - 1023
+  L R output on or off (0 , 1023)
 */
 
 void controlMotor() {
@@ -250,13 +278,13 @@ void controlMotor() {
   //tempCh1 = (int8_t)packetBuffer[1];
   // tempCh2 = (int8_t)packetBuffer[2];
 
-  //Stick center
-  if ((int8_t)packetBuffer[2] == 0) {
+  //Stick center and offset
+  if ((int8_t)packetBuffer[2] > -5  &&  (int8_t)packetBuffer[2] < 5) {
     outputControlForward = 0;
     outputControlBackward =  0;
   }
 
-  if ((int8_t)packetBuffer[1]  == 0) {
+  if ((int8_t)packetBuffer[1]  > -40  && (int8_t)packetBuffer[1] < 40) {
     outputControlRight = 0;
     outputControlLeft = 0;
   }
@@ -271,14 +299,16 @@ void controlMotor() {
 
     outputControlBackward =  map(abs((int8_t)packetBuffer[2]), 0, 60, 0, 1023);
   }
-
-  if ((int8_t)packetBuffer[1] > 0) { //if ch2 > 0  car will right
+//control left right  use on or off
+  if ((int8_t)packetBuffer[1] > 40) { //if ch2 > 0  car will right
     outputControlLeft = 0;
-    outputControlRight = map((int8_t)packetBuffer[1], 0, 35, 0, 1023);
+    //outputControlRight = map((int8_t)packetBuffer[1], 0, 35, 0, 1023);
+    outputControlRight = 1023;
   }
-  if ((int8_t)packetBuffer[1] < 0) { //if ch2 < 0  car will left
+  if ((int8_t)packetBuffer[1] < -40) { //if ch2 < 0  car will left
     outputControlRight = 0;
-    outputControlLeft = map(abs((int8_t)packetBuffer[1]), 0, 35, 0, 1023);
+    //outputControlLeft = map(abs((int8_t)packetBuffer[1]), 0, 35, 0, 1023);
+    outputControlLeft = 1023;
   }
 
 
@@ -316,7 +346,80 @@ void controlMotor() {
 
 }//end void controlMotor()
 
+void ledStatus(int timeBlink) {
+  //timeLED13
+  if (( time_now - timeLED13) >= timeBlink) {
+    //blinkState = !blinkState;
+    timeLED13 =  time_now;
+    // if the LED is off turn it on and vice-versa:
+    if (ledState == LOW)
+      ledState = HIGH;
+    else
+      ledState = LOW;
 
+    // set the LED with the ledState of the variable:
+    digitalWrite(PIN_LED, ledState);
+  }
+}
+
+void writeDataYPR(int yaw,int pitch,int roll){
+  EEPROM.write(0, yaw);
+  EEPROM.commit();
+  delay(1);
+  EEPROM.write(1, pitch);
+  EEPROM.commit();
+  delay(1);
+  EEPROM.write(2, roll);
+  EEPROM.commit();
+  delay(1);
+}
+
+void readDataYPR(){
+  //eeYaw,eePitch,eeRoll
+  eeYaw = EEPROM.read(0);
+  delay(1);
+  eePitch = EEPROM.read(1);
+  delay(1);
+  eeRoll = EEPROM.read(2);
+  delay(1);
+}
+
+void checkSetupData(){
+     if((int16_t)packetBuffer[0] == 0xf0 && (int16_t)packetBuffer[0] == 0xf0){//setUpPID
+      
+      int8_t sumCheckSetup = (int8_t)((int8_t)packetBuffer[3] + (int8_t)packetBuffer[4] + (int8_t)packetBuffer[5]);
+      if(sumCheckSetup == (int8_t)packetBuffer[6]){
+        
+      Serial.print("setup!!  ");
+      Serial.print("  setbit1:");
+      Serial.print((int8_t)packetBuffer[0]);
+      Serial.print("  setbit2:");
+      Serial.print((int8_t)packetBuffer[1]);
+      Serial.print("  YPR");
+      Serial.print((int8_t)packetBuffer[2]);
+      Serial.print("  Yaw gain:");
+      Serial.print((int8_t)packetBuffer[3]+ 128);
+      Serial.print("  Pitch gain:");
+      Serial.print((int8_t)packetBuffer[4]+ 128);
+      Serial.print("  Roll gain:");
+      Serial.print((int8_t)packetBuffer[5]+ 128);
+      Serial.print("  Sum YPR:");
+      Serial.print((int8_t)packetBuffer[6]);
+      Serial.print("  Sum YPR check:");
+      Serial.println(sumCheckSetup);
+      
+      writeDataYPR((int8_t)packetBuffer[3]+ 128,(int8_t)packetBuffer[4]+ 128,(int8_t)packetBuffer[5]+ 128);
+      readDataYPR();
+      Serial.print("  yaw in eerom:");
+      Serial.print(eeYaw);
+      Serial.print("  pitch in eerom:");
+      Serial.print(eePitch);
+      Serial.print("  roll in eerom:");
+      Serial.println(eeRoll);
+      }
+      
+    }
+}
 
 
 
